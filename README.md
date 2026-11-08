@@ -75,7 +75,7 @@ Claude Messages、OpenAI Chat Completions 和 Responses 格式分别重放到本
 
 当前构建验证环境为 Linux amd64、CPA 8.0.59 和 Oh My CPA 0.3.23。需要启用 CPA 插件支持；动态库使用 `-buildmode=c-shared`。
 
-1. 下载 [Linux amd64 安装包](packages/claude-cache-keepalive_0.10.0_linux_amd64.tar.gz)，对照 [SHA256SUMS](packages/SHA256SUMS) 校验并解压，或自行编译。
+1. 下载 [Release 中的 Linux amd64 ZIP](https://github.com/YHonc/cpa-cache-keep/releases/download/v0.10.0/claude-cache-keepalive_0.10.0_linux_amd64.zip)，对照同一 Release 的 [checksums.txt](https://github.com/YHonc/cpa-cache-keep/releases/download/v0.10.0/checksums.txt) 校验。ZIP 可供 CPA 插件商店安装器使用，也可解压后手动安装。
 2. 停止 CPA，将动态库保存为 `plugins/linux/amd64/claude-cache-keepalive.so`。替换前备份旧动态库与配置。
 3. 将 [配置示例](config.example.yaml) 合并到 CPA 配置，然后启动 CPA。
 4. 正常请求经过 CPA 后，打开“缓存保活”资源页，开启目标对话的保活开关。
@@ -120,6 +120,16 @@ make build
 ```
 
 输出为 `dist/linux/amd64/claude-cache-keepalive.so`。`ui.html` 通过 go:embed 编译进动态库，安装时不需要单独复制前端文件。
+
+发布前打包：
+
+```sh
+python3 scripts/package-release.py --library dist/linux/amd64/claude-cache-keepalive.so --version 0.10.0
+```
+
+脚本生成 `dist/release/claude-cache-keepalive_0.10.0_linux_amd64.zip` 和 `checksums.txt`。将两者上传到 `v0.10.0` GitHub Release；ZIP 根目录包含动态库、LICENSE 和 NOTICE。当前发布 Linux amd64 构建。
+
+官方商店从 [CLIProxyAPI-Plugins-Store](https://github.com/router-for-me/CLIProxyAPI-Plugins-Store) 的 registry.json 读取目录。GitHub Topic 不会自动触发收录；登记 PR 合并后才会出现在官方源。后续更新按 `v<版本>` 发布新 Release，并附同版本 ZIP 与校验文件。
 
 测试覆盖会话归组、已选会话保护、持久化、50 分钟到期调度、新请求顺延、失败重试、同会话互斥、三种协议的输出上限、TTL 解析和公开状态数据。调度测试通过构造时间验证，不等同于实等 50 分钟的上游缓存验收。部署验证记录见 [VALIDATION.md](VALIDATION.md)。
 
