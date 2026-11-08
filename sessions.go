@@ -21,6 +21,13 @@ type session struct {
 	LastSeen           time.Time
 	LastPingAt         time.Time
 	LastPingError      string
+	LastAttemptAt      time.Time
+	RetryAt            time.Time
+	InFlight           bool `json:"-"`
+	Result             string
+	LastWrite5m        int64
+	LastWrite1h        int64
+	WriteTTLKnown      bool
 	LastChatUnits      int64
 	LastPingUnits      int64
 	LastPingCacheRead  int64
@@ -31,7 +38,7 @@ type session struct {
 }
 
 func upsertSession(model, sourceFormat, toFormat string, headers http.Header, body []byte) {
-	if !isKeepaliveCandidate(body) {
+	if !isKeepaliveCandidate(body) || ((sourceFormat == "claude" || sourceFormat == "anthropic") && !inspectBody(body).HasMaxTokens) {
 		return
 	}
 	kind := subagentKind(headers, body)
@@ -42,6 +49,7 @@ func upsertSession(model, sourceFormat, toFormat string, headers http.Header, bo
 	sid := claudeSessionID(headers, body)
 	contentID := contentSessionKey(model, body)
 	mu.Lock()
+	defer persistSessionsLocked()
 	defer mu.Unlock()
 	if kind != "" {
 		subagentSkipped++
@@ -65,12 +73,15 @@ func upsertSession(model, sourceFormat, toFormat string, headers http.Header, bo
 		existing.Info = info
 		existing.PingMissStreak = 0
 		existing.PingExpensive = false
+		existing.RetryAt = time.Time{}
 		return
 	}
 	if sessions == nil {
 		sessions = map[string]*session{}
 	}
 	evictSessionsLocked(now, cfg.MaxSessions-1)
+	// A new unselected conversation must never evict a selected one.
+	if len(sessions) >= cfg.MaxSessions { return }
 	sessions[id] = &session{
 		ID:           id,
 		Label:        label,
@@ -132,6 +143,7 @@ func rekeySessionLocked(item *session, newID string) {
 
 func setSessionEnabled(id string, enabled bool) bool {
 	mu.Lock()
+	defer persistSessionsLocked()
 	defer mu.Unlock()
 	item, ok := sessions[id]
 	if !ok {
@@ -140,12 +152,16 @@ func setSessionEnabled(id string, enabled bool) bool {
 	item.Enabled = enabled
 	if enabled {
 		item.LastPingError = ""
+		item.PingExpensive = false
+		item.PingMissStreak = 0
+		item.RetryAt = time.Time{}
 	}
 	return true
 }
 
 func forgetSession(id string) bool {
 	mu.Lock()
+	defer persistSessionsLocked()
 	defer mu.Unlock()
 	if _, ok := sessions[id]; !ok {
 		return false
@@ -157,6 +173,7 @@ func forgetSession(id string) bool {
 func renameSession(id, name string) bool {
 	name = sanitizeSessionName(name)
 	mu.Lock()
+	defer persistSessionsLocked()
 	defer mu.Unlock()
 	item, ok := sessions[id]
 	if !ok {
@@ -189,7 +206,7 @@ func dueSnapshots(now time.Time, interval time.Duration) []session {
 	defer mu.Unlock()
 	out := make([]session, 0, len(sessions))
 	for _, item := range sessions {
-		if item == nil || !item.Enabled || len(item.Body) == 0 {
+		if item == nil || !item.Enabled || item.InFlight || now.Before(item.RetryAt) || len(item.Body) == 0 {
 			continue
 		}
 		if item.PingExpensive {
@@ -234,15 +251,20 @@ func listSessions() []session {
 
 func recordSessionPing(id string, pingedAt time.Time, pingErr error) {
 	mu.Lock()
+	defer persistSessionsLocked()
 	defer mu.Unlock()
 	item, ok := sessions[id]
 	if !ok {
 		return
 	}
+	item.InFlight = false
+	item.LastAttemptAt = pingedAt
 	if pingErr != nil {
 		item.LastPingError = pingErr.Error()
+		item.RetryAt = pingedAt.Add(time.Minute)
 		return
 	}
+	item.RetryAt = time.Time{}
 	item.LastPingAt = pingedAt
 	item.LastPingError = ""
 }
@@ -278,6 +300,7 @@ func evictSessionsLocked(now time.Time, keep int) {
 				dropID = id
 				break
 			}
+			if item.Enabled { continue }
 			if dropID == "" {
 				dropID = id
 				dropSeen = item.LastSeen

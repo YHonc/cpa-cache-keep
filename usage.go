@@ -409,13 +409,8 @@ func recordUsage(rec pluginapi.UsageRecord) {
 		return
 	}
 	if keep {
-		if currentPingID != "" {
-			if item := sessions[currentPingID]; item != nil {
-				item.LastPingUnits = units
-				read, write := cacheTokensFromDetail(rec.Detail)
-				applyKeepaliveCacheResult(item, read, write)
-			}
-		}
+		// Per-session evidence comes from its own HTTP response. A global
+		// in-flight flag cannot correlate concurrent real requests reliably.
 		return
 	}
 	limitHitUntil = time.Time{}

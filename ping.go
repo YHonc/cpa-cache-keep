@@ -18,6 +18,7 @@ var pingDo = httpPingMessages
 
 var pingClient = &http.Client{
 	Timeout: 120 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse },
 	Transport: &http.Transport{
 		Proxy:              nil,
 		DisableCompression: true,

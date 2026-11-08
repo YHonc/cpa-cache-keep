@@ -1,0 +1,15 @@
+plugins:
+  enabled: true
+  dir: plugins
+  configs:
+    claude-cache-keepalive:
+      enabled: true
+      interval_minutes: 50
+      max_tokens: 1
+      max_sessions: 16
+      idle_evict_minutes: 180
+      window_minutes: 300
+      stop_percent: 95
+      five_hour_budget: 0
+      guard_chat: false
+      messages_url: http://127.0.0.1:8317/v1/messages

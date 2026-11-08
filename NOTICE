@@ -1,0 +1,9 @@
+This project is derived from Banben07/cpa_claude_cache_keep.
+Upstream: https://github.com/Banben07/cpa_claude_cache_keep
+Base commit: 9b8637d05834085a402431420304e31917c885d9 (v0.8.12)
+Original copyright: (c) 2026 Banben07, MIT License.
+Modifications: (c) 2026 YHonc, MIT License.
+
+The original license is retained in LICENSE. The application uses the
+CLIProxyAPI plugin SDK and the dependencies recorded in go.mod and go.sum;
+those dependencies retain their respective licenses.

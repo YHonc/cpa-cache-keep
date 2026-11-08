@@ -70,7 +70,7 @@ import (
 
 const (
 	pluginID      = "claude-cache-keepalive"
-	pluginVersion = "0.8.12"
+	pluginVersion = "0.10.0"
 )
 
 type envelope struct {
@@ -191,6 +191,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 	switch method {
 	case pluginabi.MethodPluginRegister:
 		applyConfig(request)
+		loadSessions()
 		startLoop()
 		return okEnvelope(pluginRegistration())
 	case pluginabi.MethodPluginReconfigure:
@@ -229,8 +230,8 @@ func pluginRegistration() registration {
 		Metadata: pluginapi.Metadata{
 			Name:             pluginID,
 			Version:          pluginVersion,
-			Author:           "Banben07",
-			GitHubRepository: "https://github.com/Banben07/cpa_claudec_keep",
+			Author:           "YHonc; based on Banben07",
+			GitHubRepository: "https://github.com/YHonc/cpa-cache-keep",
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "interval_minutes", Type: pluginapi.ConfigFieldTypeInteger, Description: "How often to replay enabled sessions. Default 50."},
 				{Name: "max_tokens", Type: pluginapi.ConfigFieldTypeInteger, Description: "Output cap on keepalive pings. Default 1."},
@@ -286,7 +287,12 @@ func saveSnapshot(raw []byte) {
 	if len(req.Body) == 0 {
 		return
 	}
-	upsertSession(req.Model, req.SourceFormat, req.ToFormat, req.Headers, req.Body)
+	// Preserve the public alias, rather than replaying an internal upstream model.
+	model := req.RequestedModel
+	if model == "" { model = req.Model }
+	body := req.Body
+	if model != "" { body, _ = setReplayModel(body, model) }
+	upsertSession(model, req.SourceFormat, req.ToFormat, req.Headers, body)
 }
 
 func handleInterceptBefore(raw []byte) ([]byte, error) {
@@ -323,6 +329,7 @@ func handleStatusRequest(raw []byte) ([]byte, error) {
 		_ = json.Unmarshal(raw, &req)
 	}
 	redirect := false
+	actionError := ""
 	if id := sanitizeSessionID(queryGet(req.Query, "toggle")); id != "" {
 		on := queryGet(req.Query, "on")
 		setSessionEnabled(id, on != "0")
@@ -338,6 +345,7 @@ func handleStatusRequest(raw []byte) ([]byte, error) {
 	}
 	if id := sanitizeSessionID(queryGet(req.Query, "ping")); id != "" {
 		if err := pingSessionNow(id); err != nil {
+			actionError = err.Error()
 			_ = hostLog(fmt.Sprintf("claude-cache-keepalive manual ping failed: %s", err.Error()))
 		} else {
 			_ = hostLog("claude-cache-keepalive manual ping ok")
@@ -352,12 +360,14 @@ func handleStatusRequest(raw []byte) ([]byte, error) {
 		setGuardChat(on)
 		redirect = true
 	}
-	if redirect && strings.TrimSpace(req.Path) != "" {
-		return okEnvelope(map[string]any{
-			"StatusCode": http.StatusSeeOther,
-			"Headers":    http.Header{"Location": []string{req.Path}},
-			"Body":       []byte{},
-		})
+	// OMC prefixes the public URL with /api/v1/plugin-host. Redirecting to
+	// req.Path loses that prefix and reaches the intentionally blocked native
+	// resource route. Render the updated page at the existing proxy URL.
+	_ = redirect
+	if queryGet(req.Query,"format")=="json" {
+		state:=publicStatus();state.ActionError=actionError
+		body,err:=json.Marshal(state);if err!=nil{return nil,err}
+		return okEnvelope(map[string]any{"StatusCode":http.StatusOK,"Headers":http.Header{"Content-Type":[]string{"application/json; charset=utf-8"},"Cache-Control":[]string{"no-store"}},"Body":body})
 	}
 	return okEnvelope(map[string]any{
 		"StatusCode": http.StatusOK,
@@ -416,7 +426,7 @@ func stopLoop() {
 	}
 }
 
-const checkEvery = 30 * time.Second
+const checkEvery = 5 * time.Second
 
 func pingLoop(stop <-chan struct{}) {
 	ticker := time.NewTicker(checkEvery)
@@ -473,6 +483,7 @@ func pingOnce() (bool, int, error) {
 	}
 	var errs []string
 	for _, snap := range targets {
+		if !claimPing(snap, false) { continue }
 		err := pingSession(snap, maxTokens, messagesURL)
 		recordSessionPing(snap.ID, time.Now(), err)
 		if err != nil {
@@ -488,10 +499,6 @@ func pingOnce() (bool, int, error) {
 func pingSession(snap session, maxTokens int, messagesURL string) error {
 	if len(snap.Body) == 0 {
 		return fmt.Errorf("empty snapshot")
-	}
-	body, err := limitOutput(snap.Body, maxTokens)
-	if err != nil {
-		return err
 	}
 	if messagesURL == "" {
 		messagesURL = defaultMessagesURL
@@ -509,7 +516,9 @@ func pingSession(snap session, maxTokens int, messagesURL string) error {
 		currentPingID = ""
 		mu.Unlock()
 	}()
-	return replayPing(messagesURL, snap.Headers, body)
+	url, body, err := prepareReplay(snap, messagesURL)
+	if err != nil { return err }
+	return replayForSession(snap, url, body)
 }
 
 func pingSessionNow(id string) error {
@@ -522,6 +531,7 @@ func pingSessionNow(id string) error {
 		recordSessionPing(id, time.Now(), err)
 		return err
 	}
+	if !claimPing(snap, true) { return fmt.Errorf("该会话已有请求正在保活或快照已更新") }
 	mu.Lock()
 	maxTokens := cfg.MaxTokens
 	messagesURL := cfg.MessagesURL
@@ -567,11 +577,12 @@ func currentStatus() statusPage {
 	page.Version = pluginVersion
 	page.Sessions = listSessions()
 	for _, item := range page.Sessions {
-		if !item.Enabled {
+		if !item.Enabled || item.PingExpensive {
 			continue
 		}
 		page.EnabledCount++
 		next := sessionNextPingAt(item.LastSeen, item.LastPingAt, now, interval)
+		if item.RetryAt.After(next) { next = item.RetryAt }
 		if next.IsZero() {
 			continue
 		}

@@ -36,7 +36,7 @@ type pluginConfig struct {
 }
 
 func defaultConfig() pluginConfig {
-	return pluginConfig{IntervalMinutes: 50, MaxTokens: 1, MaxSessions: 8, IdleEvictMinutes: 180, WindowMinutes: defaultWindowMin, ReservePercent: defaultReservePct, MessagesURL: defaultMessagesURL}
+	return pluginConfig{IntervalMinutes: 50, MaxTokens: 1, MaxSessions: 16, IdleEvictMinutes: 180, WindowMinutes: defaultWindowMin, ReservePercent: defaultReservePct, MessagesURL: defaultMessagesURL}
 }
 
 func parseConfig(raw []byte) pluginConfig {
@@ -89,6 +89,9 @@ func (c pluginConfig) guardChat() bool {
 func isClaudeUpstream(toFormat, model string) bool {
 	f := strings.ToLower(toFormat)
 	m := strings.ToLower(model)
+	for _, token := range []string{"claude", "opus", "sonnet", "haiku", "fable"} {
+		if strings.Contains(m, token) { return true }
+	}
 	skip := []string{"codex", "gemini", "openai", "grok", "gpt-", "chatgpt"}
 	for _, token := range skip {
 		if strings.Contains(f, token) || strings.Contains(m, token) {
@@ -126,17 +129,12 @@ func inspectBody(body []byte) bodyInfo {
 		CacheControlCount: strings.Count(string(body), `"cache_control"`),
 		FirstUser:         firstUserText(body),
 	}
-	switch {
-	case strings.Contains(string(body), `"ttl":"1h"`) || strings.Contains(string(body), `"ttl": "1h"`):
-		info.CacheTTL = "1h"
-	case strings.Contains(string(body), `"ttl":"5m"`) || strings.Contains(string(body), `"ttl": "5m"`):
-		info.CacheTTL = "5m"
-	}
+	info.CacheTTL = declaredCacheTTL(body)
 	return info
 }
 
 func isKeepaliveCandidate(body []byte) bool {
-	return inspectBody(body).HasMaxTokens
+	return gjson.GetBytes(body, "messages").IsArray() || gjson.GetBytes(body, "input").Exists()
 }
 
 // subagentKind reports whether this Claude request is a Claude Code Task/Agent
@@ -171,11 +169,18 @@ func sessionKey(model string, headers http.Header, body []byte) string {
 }
 
 func claudeSessionID(headers http.Header, body []byte) string {
+	for _, key := range []string{"Session_id", "X-Session-Id", "X-Codex-Session-Id"} {
+		if sid := strings.TrimSpace(headerGetCI(headers, key)); sid != "" { return sid }
+	}
 	if sid := strings.TrimSpace(headerGetCI(headers, "X-Claude-Code-Session-Id")); sid != "" {
 		return sid
 	}
 	if sid := strings.TrimSpace(gjson.GetBytes(body, "metadata.session_id").String()); sid != "" {
 		return sid
+	}
+	uid := gjson.GetBytes(body,"metadata.user_id").String()
+	if gjson.Valid(uid) {
+		if sid := gjson.Get(uid,"session_id").String(); sid != "" { return sid }
 	}
 	return ""
 }
@@ -284,6 +289,16 @@ func sessionLabel(body []byte) string {
 }
 
 func firstUserText(body []byte) string {
+	if !gjson.GetBytes(body, "messages").Exists() {
+		input := gjson.GetBytes(body, "input")
+		if input.Type == gjson.String { return input.String() }
+		var text string
+		input.ForEach(func(_, item gjson.Result) bool {
+			if item.Get("role").String() == "user" { text = contentText(item.Get("content")); return text == "" }
+			return true
+		})
+		return text
+	}
 	var fallback, found string
 	gjson.GetBytes(body, "messages").ForEach(func(idx, msg gjson.Result) bool {
 		text := contentText(msg.Get("content"))

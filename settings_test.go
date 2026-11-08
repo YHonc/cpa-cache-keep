@@ -102,7 +102,7 @@ func TestHandleStatusStopRedirects(t *testing.T) {
 	if err := json.Unmarshal(env.Result, &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.StatusCode != http.StatusSeeOther {
+	if out.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d", out.StatusCode)
 	}
 	snap := currentBudget(time.Now())
@@ -139,7 +139,7 @@ func TestHandleStatusGuardRedirects(t *testing.T) {
 	if err := json.Unmarshal(env.Result, &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.StatusCode != http.StatusSeeOther {
+	if out.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d", out.StatusCode)
 	}
 	if currentBudget(time.Now()).GuardChat {

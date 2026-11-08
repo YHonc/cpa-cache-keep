@@ -120,7 +120,7 @@ func TestSessionDue(t *testing.T) {
 
 func TestRenderStatusHTMLEmptyAndArmed(t *testing.T) {
 	resetSessionsForTest()
-	empty := renderStatusHTML()
+	empty := renderLegacyStatusHTML()
 	if !strings.Contains(empty, "等待对话") {
 		t.Fatalf("empty page missing status: %s", empty)
 	}
@@ -130,7 +130,7 @@ func TestRenderStatusHTMLEmptyAndArmed(t *testing.T) {
 	upsertSession("claude-sonnet-5", "claude", "claude", nil, claudeBody("改这段文案", "sonnet-sys"))
 	t.Cleanup(resetSessionsForTest)
 
-	html := renderStatusHTML()
+	html := renderLegacyStatusHTML()
 	if !strings.Contains(html, "未开保活") {
 		t.Fatalf("new sessions should start unchecked: %s", html)
 	}
@@ -144,7 +144,7 @@ func TestRenderStatusHTMLEmptyAndArmed(t *testing.T) {
 		}
 		setSessionEnabled(item.ID, true)
 	}
-	html = renderStatusHTML()
+	html = renderLegacyStatusHTML()
 	if !strings.Contains(html, "已记录，等待保活") {
 		t.Fatalf("armed page missing status: %s", html)
 	}
@@ -175,7 +175,7 @@ func TestRenderStatusHTMLEmptyAndArmed(t *testing.T) {
 
 	setSessionEnabled(items[0].ID, false)
 	setSessionEnabled(items[1].ID, false)
-	paused := renderStatusHTML()
+	paused := renderLegacyStatusHTML()
 	if !strings.Contains(paused, "未开保活") {
 		t.Fatalf("paused page missing status: %s", paused)
 	}
@@ -274,7 +274,7 @@ func TestPingSessionPostsToMessages(t *testing.T) {
 		gotKeep = headers.Get(keepaliveHeaderKey)
 		gotAuth = headers.Get("Authorization")
 		gotBeta = headers.Get("Anthropic-Beta")
-		return http.StatusOK, []byte(`{"type":"message"}`), nil
+		return http.StatusOK, []byte(`{"type":"message","usage":{"cache_read_input_tokens":2048}}`), nil
 	}
 	t.Cleanup(func() { pingDo = orig })
 

@@ -1,291 +1,128 @@
-# CPA Claude cache keepalive / CPA Claude 缓存保活
+# CPA Cache Keep
 
-[English](#english) · [中文](#中文)
+为经过 CLIProxyAPI 的 Claude 对话自动续期 prompt cache。在面板中选择对话后，插件从最近一次普通请求或成功保活起算，默认空闲 50 分钟时重放该对话，生成上限为 1 token。对话继续产生请求时，计时自动顺延。
 
-A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) plugin that remembers Claude chats going through CPA and, every 50 minutes, replays each checked session with `max_tokens=1` so Anthropic’s 1-hour prompt cache TTL stays warm.
+基于 [Banben07/cpa_claude_cache_keep](https://github.com/Banben07/cpa_claude_cache_keep) v0.8.12 开发，保留原项目 MIT 许可。插件 ID 沿用 `claude-cache-keepalive`，可以替换原动态库。
 
-[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 插件：记住走 CPA 的 Claude 对话，每隔 50 分钟把已勾选会话原样重发，并把 `max_tokens` 卡成 1，用来刷新 Anthropic prompt cache 的 1 小时 TTL。
+![浅色界面](docs/ui-light.jpg)
 
-Current version **0.8.12**. / 当前版本 **0.8.12**。
+<details><summary>查看深色界面</summary>
 
-[![LINUX DO](https://img.shields.io/badge/LINUX%20DO-community-ff6b35)](https://linux.do)
+![深色界面](docs/ui-dark.jpg)
 
-This project acknowledges the [LINUX DO](https://linux.do) community. / 本项目链接认可 [LINUX DO](https://linux.do) 社区。
+</details>
 
----
+截图使用演示会话。正式页面读取插件真实状态，支持明暗切换、对话筛选、重命名、开启／暂停和立即续期。说明、识别依据和缓存统计放在问号详情中。
 
-## English
+## 实现原理
 
-Claude upstream only. Codex / GPT / Gemini / Grok are skipped. Requests without `max_tokens` (usually `/v1/messages/count_tokens`) are not added to the keepalive list.
+Claude prompt cache 会在成功读取后刷新有效期。插件通过 CPA 原有入口重放已保存的对话，请求携带相同的正文、工具定义和缓存相关参数，把输出上限设为 1，并关闭流式返回。这里的“最小请求”指最小生成量，完整缓存前缀仍需随请求发送。单独发送一句 ping 或调用 count_tokens 不能替代这一步。
 
-Keepalive replay is `POST /v1/messages` on CPA itself (the same gin path Claude Code uses), not `host.model.execute`. Cloak, `cache_control`, beta headers, and the Claude executor then match a real chat, so the prompt cache can hit.
-
-A successful keepalive is a real Messages completion that **reads** the cached prefix. That cache read refreshes the TTL. `max_tokens=1` is the cheap way to force a completion without a long reply. `count_tokens` does not refresh the cache. Official `max_tokens: 0` prefill exists, but it is rejected when thinking is on, so this plugin keeps `max_tokens=1`.
-
-### What it does
-
-- Remembers up to 8 chats. With `X-Claude-Code-Session-Id`, `/compact` stays the same row. Without that header it keys on model + first user message + system; compact may show up as a new row and is not merged into another chat
-- New chats default to keepalive off. Check a session on the status page to keep it. From the last real chat request, each checked session is POSTed back to local `/v1/messages` every 50 minutes (`max_tokens=1`, `stream=false`). Thinking / effort are left as-is so the cache key does not change
-- Status page: toggle, rename, forget, **Ping now** (replays that session immediately, even if the timer is still running), the 5-hour stop percent, and 5h / 7d utilization from upstream headers
-- Claude Code Task / Agent subagents are not kept alive (`X-Claude-Code-Agent-Id`, `cc_is_subagent=true` in system)
-- After a 5-hour stop, **chat stays blocked** until utilization **actually** reaches the stop line (default 95%). A cache-miss rewrite is not used to predict the next turn. `/compact` still goes through. Status page can turn this local block off. If chat and keepalive are both paused and no Reset time is known, one probe chat is allowed so the window cannot deadlock
-
-Unchecked sessions still update their snapshot on new messages. Checked sessions are not evicted for idle. Unchecked ones older than `idle_evict_minutes` (default 180) are dropped; over the cap, unchecked chats are replaced first, then the least-recent.
-
-Restarting CPA clears in-memory sessions and the 5-hour usage window. The stop percent from the status page is written to `claude-cache-keepalive.settings.json` and survives restart.
-
-### Build
-
-Needs Go **1.26+** (CLIProxyAPI v7 SDK) and CGO (Linux: `gcc`; macOS: Xcode CLI tools). Must be **`-buildmode=c-shared`**, not `-buildmode=plugin`.
-
-```bash
-make test
-make build
-```
-
-Output: `dist/<goos>/<goarch>/claude-cache-keepalive.so` (`.dylib` on macOS).
-
-On a host without a local Go 1.26 toolchain, Docker works:
-
-```bash
-docker run --rm -e CGO_ENABLED=1 -v "$PWD":/src -w /src golang:1.26 \
-  bash -c 'go test ./... && go build -buildvcs=false -buildmode=c-shared -o dist/linux/amd64/claude-cache-keepalive.so .'
-```
-
-### Install
-
-The file name must be `claude-cache-keepalive`:
+默认续期时间为：
 
 ```text
-~/.cli-proxy-api/plugins/linux/amd64/claude-cache-keepalive.so
-~/.cli-proxy-api/plugins/darwin/arm64/claude-cache-keepalive.dylib
+下次续期 = max(最近普通请求时间, 最近成功保活时间) + 50 分钟
 ```
 
-`config.yaml`:
+服务端每 5 秒检查到期会话。失败后不更新成功时间，1 分钟后重试；单个会话不会重叠保活。新请求会更新快照和计时。关闭浏览器后，服务器上的计时仍继续。
 
-```yaml
-plugins:
-  enabled: true
-  dir: "plugins"
-  configs:
-    claude-cache-keepalive:
-      enabled: true
-      interval_minutes: 50
-      max_tokens: 1
-      max_sessions: 8
-      idle_evict_minutes: 180
-      window_minutes: 300
-      stop_percent: 95
-      five_hour_budget: 0
-      guard_chat: true
-      messages_url: http://127.0.0.1:8317/v1/messages
+50 分钟策略适用于上游实际使用 1 小时缓存的情况。5 分钟缓存需要先在客户端或 CPA 中改为 1h；插件会显示提示，不自动改写原请求的缓存配置。改变 system、工具、thinking、effort 或账号路由都可能影响命中。接口时长与统计字段见 [Claude 官方缓存文档](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)。
+
+## 如何识别对话
+
+优先读取客户端会话 ID：`Session_id`、`X-Session-Id`、`X-Codex-Session-Id`、`X-Claude-Code-Session-Id`，以及正文中的 `metadata.session_id` 或 JSON 格式 `metadata.user_id.session_id`。
+
+没有会话 ID 时，用“模型名＋首条用户消息＋系统提示前 2048 字节”生成指纹。指纹方式可能合并相同开场的不同对话，也可能在压缩上下文、修改系统提示或切换模型后拆分同一对话。页面详情会注明识别方式。默认名称来自首条用户消息，可手动改名；插件不读取客户端侧栏中的聊天标题。
+
+客户端、网关和协议转换层是否保留会话 ID，决定了实际归组效果。换用客户端或中转链路后，应分别发起两个对话，再在其中一个继续请求，检查列表归组和计时是否符合预期。
+
+## 架构
+
+```mermaid
+flowchart LR
+    A[客户端请求] --> B[CPA 请求拦截器]
+    B --> C[会话 ID / 内容指纹]
+    C --> D[会话快照与持久化]
+    D --> E[服务端调度器]
+    E --> F[按原协议重放到本机 CPA]
+    F --> G[Claude 上游]
+    G --> H[本次响应 usage]
+    H --> D
+    I[面板 UI] --> J[插件管理接口]
+    J --> D
 ```
 
-`plugins.enabled` must be `true`. Restart CPA, or hot-reload via the management API. `X-CPA-SUPPORT-PLUGIN: 1` on the management response means the binary has plugin support.
+| 模块 | 职责 |
+| --- | --- |
+| `main.go` | C ABI、插件注册、请求拦截、管理操作和定时循环 |
+| `keepalive.go`、`sessions.go` | 请求筛选、会话归组、快照、时间与容量管理 |
+| `renew.go`、`ping.go` | 协议路由、最小输出重放、响应验证、文件持久化 |
+| `cache_ttl.go` | 解析请求声明的 1h、5m、混合或未知时长 |
+| `ui_live.go`、`ui.html` | 脱敏状态接口、实时页面和明暗主题 |
+| `usage.go`、`settings.go` | 继承上游额度状态、暂停规则与配置持久化 |
 
-The management UI can flip this plugin back to `enabled: false`. Check that before a restart.
+Claude Messages、OpenAI Chat Completions 和 Responses 格式分别重放到本机 `/v1/messages`、`/v1/chat/completions` 和 `/v1/responses`。保留客户端请求的公开模型别名。这里只收录最终面向 Claude 的请求，不为 GPT、Gemini 等模型续期。兼容协议是否能命中，还取决于 CPA 的转换行为和上游路由。
 
-### Claude Code
+## 缓存状态怎么看
 
-`~/.claude/settings.json`:
+页面上的 1h / 5m 来自已捕获请求的 `cache_control`；`ephemeral` 未写 `ttl` 时按 5m 标识。快照在 CPA 执行器转换之前捕获，执行器可能继续补充缓存参数，所以“未知”不等于上游没有缓存。
 
-```json
-{
-  "promptCacheTtl": "1h",
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
-    "ANTHROPIC_AUTH_TOKEN": "<CPA gateway key>",
-    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
-  }
-}
-```
+保活响应中的 `cache_read_input_tokens` 或兼容协议的 `cached_tokens` 用于确认本次读取量；`cache_creation_input_tokens` 表示写入量。如果响应提供 `cache_creation.ephemeral_1h_input_tokens` 和 `ephemeral_5m_input_tokens`，详情会列出按时长拆分的写入 token。读取总量没有时长拆分，不能据此声称“读取了 1h 缓存”。
 
-Use `127.0.0.1` for the gateway. Cursor Gateway rejects non-loopback `http://` with `must use https (or http on loopback)`. CPA’s default port is `8317`.
+连续两次大量缓存写入时，沿用原项目规则暂停该会话；新普通请求或手动续期可以恢复。上游额度达到暂停条件时，自动和手动保活都会暂停。默认不拦截普通聊天。
 
-A session appears on the status page after a real chat. The first keepalive is about 50 minutes after that, unless you click **Ping now**.
+## 安装
 
-Status page:
+当前构建验证环境为 Linux amd64、CPA 8.0.59 和 Oh My CPA 0.3.23。需要启用 CPA 插件支持；动态库使用 `-buildmode=c-shared`。
+
+1. 下载 [Linux amd64 安装包](packages/claude-cache-keepalive_0.10.0_linux_amd64.tar.gz)，对照 [SHA256SUMS](packages/SHA256SUMS) 校验并解压，或自行编译。
+2. 停止 CPA，将动态库保存为 `plugins/linux/amd64/claude-cache-keepalive.so`。替换前备份旧动态库与配置。
+3. 将 [配置示例](config.example.yaml) 合并到 CPA 配置，然后启动 CPA。
+4. 正常请求经过 CPA 后，打开“缓存保活”资源页，开启目标对话的保活开关。
+
+原生资源路径：
 
 ```text
 /v0/resource/plugins/claude-cache-keepalive/status
 ```
 
-### 5-hour quota
+Oh My CPA 代理路径：
 
-The plugin never probes Anthropic for quota. It only reads response headers that already came back: `Anthropic-Ratelimit-Unified-5h-Utilization`, `Status`, and `Reset`. The top **7 天已用** card uses the matching `7d` headers.
+```text
+/api/v1/plugin-host/v0/resource/plugins/claude-cache-keepalive/status
+```
 
-- Default: CPA chat is locally 429’d only when utilization **is already** at **95%**, and stays blocked until util drops or `Reset`. Status page has an on/off for this guard
-- Status page can change “stop chat at x%” (60–99). That value is stored in `claude-cache-keepalive.settings.json`. When a Reset time is known, it is shown on the 5-hour card
-- After Reset, local utilization is cleared. The top card may show `—` until the next Anthropic response brings a new header. The quota table still lists the last samples
-- Keepalive keeps using the slice after the stop line (1 token + cache read)
-- At 100% / `rejected`, keepalive pauses too. If both are paused and Reset is unknown, one chat probe is allowed
-- `/compact` (Claude Code summary prompt, compact continuation, `context_management` compact edits, or `Anthropic-Beta` containing `compact-2026`) is not quota-blocked. Talking about `/compact` is still a normal chat
+对外访问走面板已认证的代理入口。原生资源路径应限制在本机或由反向代理提供认证，不能直接公开会话内容和管理操作。插件保持相对路径请求，适配 OMC 的代理前缀。
 
-The **Quota log** on the status page keeps 5 rows: cache read/write, 5h/7d headers, and raw values. Almost every 429 you see is local to CPA; an in-flight request cannot be stopped.
+## 配置与数据
 
-`five_hour_budget` is only a fallback when utilization headers are missing.
+| 字段 | 推荐值 | 作用 |
+| --- | --- | --- |
+| `interval_minutes` | 50 | 空闲续期间隔 |
+| `max_sessions` | 16 | 保存会话数，上限 32；已开启会话不会被新会话挤掉 |
+| `max_tokens` | 1 | 兼容配置字段；当前重放固定使用 1 token 输出上限 |
+| `idle_evict_minutes` | 180 | 未开启会话的空闲淘汰时间，0 为关闭 |
+| `guard_chat` | false | 关闭继承的普通聊天额度拦截 |
+| `messages_url` | `http://127.0.0.1:8317/v1/messages` | 本机 CPA 地址，重放时按协议选择路径 |
 
-Cache misses are usually a **prefix change**, not a missing 1-token output: `currentDate`, tool schemas, skills/MCP reminders, effort/thinking, or mixed 5m/1h breakpoints will rewrite the whole prefix. A single expensive keepalive miss keeps pinging so that paid 1h rewrite can refresh; two consecutive expensive misses pause that session.
+名单、选择、时间与快照保存在 CPA 工作目录的 `claude-cache-keepalive.sessions.json`，写入权限为 0600。快照含对话正文和重放所需的客户端认证头，应留在服务器，不能提交到 Git。页面状态接口不返回请求正文、请求头或 API Key。
 
-### Config
+重启后恢复持久化会话。旧版插件的内存快照不能直接迁移，首次替换后需产生一次新的正常请求，再勾选会话。回退时恢复旧动态库和配置并重启 CPA；保留状态文件即可在重新升级时恢复。
 
-| Field | Default | Meaning |
-|------|---------|---------|
-| `interval_minutes` | 50 | Keepalive interval |
-| `max_tokens` | 1 | Keepalive output cap |
-| `max_sessions` | 8 | Max remembered chats (cap 32) |
-| `idle_evict_minutes` | 180 | Drop unchecked chats this idle; `0` disables idle eviction |
-| `window_minutes` | 300 | Usage window (~Claude 5-hour rolling limit) |
-| `stop_percent` | 95 | Stop CPA chat at this 5h percent. Editable on the status page |
-| `reserve_percent` | 5 | Slice left after the stop line. Overridden if `stop_percent` is set |
-| `five_hour_budget` | 0 | Weighted fallback with no 5h headers; `0` trusts headers only |
-| `guard_chat` | true | Intercept new Claude chats after the stop line |
-| `messages_url` | `http://127.0.0.1:8317/v1/messages` | Keepalive replay URL. Change if CPA is not on 8317 |
+## 构建与测试
 
-### How to tell it works
+需要 Go 1.26+ 和 CGO 工具链。Linux 安装 GCC 与 libc 开发头文件后执行：
 
-On the keepalive response, or the status-page **Cache** column:
-
-- Large `cache_read_input_tokens`, `cache_creation_input_tokens` near 0 → hit, TTL refreshed
-- Sudden large `cache_creation` → prefix changed; do not keep empty-pinging that snapshot
-
-If upstream TTL is still 5 minutes, a 50-minute ping is too late. Set `promptCacheTtl: "1h"` in Claude Code and let CPA forward `anthropic-beta` unchanged.
-
----
-
-## 中文
-
-只处理 Claude 上游。Codex / GPT / Gemini / Grok 会跳过。没有 `max_tokens` 的请求（常见是 `/v1/messages/count_tokens`）也不会进保活名单。
-
-保活重放走 CPA 自己的 `POST /v1/messages`（gin 入口，和 Claude Code 同一条），不再用 `host.model.execute`。这样 cloak、`cache_control`、beta 头和 Claude executor 的处理跟对话一致，prompt cache 才能对上。
-
-保活必须是一发真正的 Messages **补全**，用 **cache read** 刷新 TTL，不是 `count_tokens`。`max_tokens=1` 是最便宜的补全；官方还有 `max_tokens: 0` 只做 prefill，但和 thinking 开着不兼容，所以插件继续用 1。
-
-### 做什么
-
-- 最多记住 8 路。有 `X-Claude-Code-Session-Id` 时按这个 ID 认对话，`/compact` 后仍是同一路。没有这个头时只用「模型 + 第一条用户消息 + system」，compact 可能显示成新的一行，不会猜着并进别的对话
-- 新对话默认不保活，状态页勾上才会续；从最后一次对话请求起算，每 50 分钟把上次请求 POST 回本机 `/v1/messages` 一次（`max_tokens=1`，`stream=false`）。thinking / effort 原样带着，避免把缓存键改掉
-- 状态页可勾选、取消、改名、忘记某一路，也可点「立刻保活」马上重放这一路；还可改 5 小时额度的停线；顶栏显示 5 小时和 7 天已用
-- Claude Code 的 Task / Agent 子代理不进保活名单（带 `X-Claude-Code-Agent-Id`，system 里有 `cc_is_subagent=true`）
-- 5 小时用量**真到**停线（默认 95%）后才拦对话，不用 cache miss 去估下一发。`/compact` 仍放行。状态页可关掉这道本地拦截。对话和保活都停、又还没读到刷新时间时，会放行一发探测，避免卡死
-
-取消勾选后仍会跟着新消息更新快照。已勾选的不会因为空闲被踢掉。未勾选的超过 `idle_evict_minutes`（默认 180）会被丢掉；超过上限时优先顶掉未勾选的，再才动最久没说话的。
-
-重启 CPA 会清空内存里的会话名单和 5 小时用量窗口。状态页改过的停线会写到 `claude-cache-keepalive.settings.json`，重启后仍在。
-
-### 编译
-
-需要 Go **1.26+**（CLIProxyAPI v7 SDK）和 CGO（Linux 装 `gcc`，macOS 有 Xcode CLI tools）。必须用 **`-buildmode=c-shared`**，不要用 `-buildmode=plugin`。
-
-```bash
-make test
+```sh
+go test ./...
+go test -race ./...
 make build
 ```
 
-产物在 `dist/<goos>/<goarch>/claude-cache-keepalive.so`（macOS 是 `.dylib`）。
+输出为 `dist/linux/amd64/claude-cache-keepalive.so`。`ui.html` 通过 go:embed 编译进动态库，安装时不需要单独复制前端文件。
 
-机器上没有 Go 1.26 时可以用 Docker：
+测试覆盖会话归组、已选会话保护、持久化、50 分钟到期调度、新请求顺延、失败重试、同会话互斥、三种协议的输出上限、TTL 解析和公开状态数据。调度测试通过构造时间验证，不等同于实等 50 分钟的上游缓存验收。部署验证记录见 [VALIDATION.md](VALIDATION.md)。
 
-```bash
-docker run --rm -e CGO_ENABLED=1 -v "$PWD":/src -w /src golang:1.26 \
-  bash -c 'go test ./... && go build -buildvcs=false -buildmode=c-shared -o dist/linux/amd64/claude-cache-keepalive.so .'
-```
+## 许可与来源
 
-### 装到 CPA
-
-文件名必须是 `claude-cache-keepalive`：
-
-```text
-~/.cli-proxy-api/plugins/linux/amd64/claude-cache-keepalive.so
-~/.cli-proxy-api/plugins/darwin/arm64/claude-cache-keepalive.dylib
-```
-
-`config.yaml`：
-
-```yaml
-plugins:
-  enabled: true
-  dir: "plugins"
-  configs:
-    claude-cache-keepalive:
-      enabled: true
-      interval_minutes: 50
-      max_tokens: 1
-      max_sessions: 8
-      idle_evict_minutes: 180
-      window_minutes: 300
-      stop_percent: 95
-      five_hour_budget: 0
-      guard_chat: true
-      messages_url: http://127.0.0.1:8317/v1/messages
-```
-
-`plugins.enabled` 必须是 `true`。改完重启 CPA，或走管理 API 热加载。管理接口响应头有 `X-CPA-SUPPORT-PLUGIN: 1` 说明二进制带插件。
-
-管理页有时会把 `claude-cache-keepalive.enabled` 拨回 `false`，重启前看一眼。
-
-### 接到 Claude Code
-
-`~/.claude/settings.json`：
-
-```json
-{
-  "promptCacheTtl": "1h",
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
-    "ANTHROPIC_AUTH_TOKEN": "<CPA 入口 key>",
-    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
-  }
-}
-```
-
-网关地址用 `127.0.0.1`。Cursor Gateway 对非 loopback 的 `http://` 会报 `must use https (or http on loopback)`。CPA 默认端口 `8317`。
-
-正常聊一轮后，状态页才会出现会话；空闲约 50 分钟后打第一次保活，或点「立刻保活」。
-
-状态页：
-
-```text
-/v0/resource/plugins/claude-cache-keepalive/status
-```
-
-### 5 小时额度
-
-插件不额外打上游查额度，只读已经回来的响应头 `Anthropic-Ratelimit-Unified-5h-Utilization` / `Status` / `Reset`。顶栏 **7 天已用** 读对应的 `7d` 头。
-
-- CPA 对话默认只在用量**已经到 95%** 时本地 429，并拦到用量掉回停线或 `Reset` 到期。cache miss 不拿来估下一发
-- 状态页可改「对话停在 x%」（60–99），也可关掉拦截；都写到 `claude-cache-keepalive.settings.json`
-- `Reset` 到期后会清掉本地用量。顶栏可能显示 `—`，等下一发 Anthropic 响应带新头；额度表仍保留最近几条记录
-- 保活继续用停线后面那一截（1 token + cache read）
-- 用到 100% / `rejected` 时保活也停。两边都停且没有 `Reset` 时，放行一发对话探测新额度头
-- `/compact`（Claude Code 摘要提示、压缩续写、`context_management` 的 compact edit、或 `Anthropic-Beta` 里带 `compact-2026`）不受停线限制。只是聊「/compact 怎么用」仍按普通对话拦
-
-状态页下方的 **额度记录** 最多 5 条，用来确认有没有真正读到用量头和 cache read/write。你看到的 429 几乎都是 CPA 本地的；正在飞行的那一次拦不住。
-
-`five_hour_budget` 只在没有用量头时当后备。
-
-缓存不命中多半是 **前缀变了**，不是少输出了 1 个 token：`currentDate`、工具描述、skills/MCP 提醒、effort/thinking、5 分钟和 1 小时断点混用，都会整段重写。保活单次大写仍继续心跳，好续上刚付过费的 1h 前缀；连续两次大写才暂停该路。
-
-### 配置
-
-| 字段 | 默认 | 含义 |
-|------|------|------|
-| `interval_minutes` | 50 | 心跳间隔 |
-| `max_tokens` | 1 | 保活输出上限 |
-| `max_sessions` | 8 | 最多记住多少路对话（上限 32） |
-| `idle_evict_minutes` | 180 | 丢掉多久没新请求的未勾选对话；`0` 表示不按空闲淘汰 |
-| `window_minutes` | 300 | 用量窗口，对应 Claude 约 5 小时滚动限额 |
-| `stop_percent` | 95 | 5 小时用量到达该百分比时停 CPA 对话。状态页可改 |
-| `reserve_percent` | 5 | 停线后面留下的百分比。设了 `stop_percent` 时会被覆盖 |
-| `five_hour_budget` | 0 | 没有上游 5h 用量头时的加权后备；`0` 表示只信用量头 |
-| `guard_chat` | true | 到达停线后拦截 CPA 上的新 Claude 对话 |
-| `messages_url` | `http://127.0.0.1:8317/v1/messages` | 保活重放地址。CPA 不在 8317 时改这里 |
-
-### 怎么确认有效
-
-保活响应当里，或状态页额度表「缓存」列：
-
-- `cache_read_input_tokens` 很大，`cache_creation_input_tokens` 接近 0 → 命中，TTL 已刷新
-- `cache_creation` 突然变大 → 前缀变了，不要继续空 ping
-
-上游 TTL 若仍是 5 分钟，50 分钟一次来不及。Claude Code 里设 `promptCacheTtl: "1h"`，并让 CPA 原样转发 `anthropic-beta`。
+[MIT License](LICENSE)。原作 Copyright © 2026 Banben07；本项目修改 Copyright © 2026 YHonc。上游基线及依赖说明见 [NOTICE](NOTICE)。

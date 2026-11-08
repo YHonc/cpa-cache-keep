@@ -52,6 +52,7 @@ func TestKeepaliveCacheShowsOnStatus(t *testing.T) {
 	}
 	currentPingID = id
 	keepaliveActive = 1
+	applyKeepaliveCacheResult(sessions[id],298409,799)
 	mu.Unlock()
 	recordUsage(pluginapi.UsageRecord{
 		Provider: "claude",
@@ -67,7 +68,7 @@ func TestKeepaliveCacheShowsOnStatus(t *testing.T) {
 			"Anthropic-Ratelimit-Unified-5h-Utilization": []string{"0.14"},
 		},
 	})
-	html := renderStatusHTML()
+	html := renderLegacyStatusHTML()
 	if !strings.Contains(html, "命中") {
 		t.Fatal("status should show cache hit")
 	}
@@ -83,6 +84,7 @@ func TestKeepaliveCacheShowsOnStatus(t *testing.T) {
 	}
 	currentPingID = id
 	keepaliveActive = 1
+	applyKeepaliveCacheResult(sessions[id],0,302619)
 	mu.Unlock()
 	recordUsage(pluginapi.UsageRecord{
 		Provider: "claude",
@@ -97,13 +99,16 @@ func TestKeepaliveCacheShowsOnStatus(t *testing.T) {
 			"Anthropic-Ratelimit-Unified-5h-Utilization": []string{"0.23"},
 		},
 	})
-	html = renderStatusHTML()
+	html = renderLegacyStatusHTML()
 	if !strings.Contains(html, "未命中") {
 		t.Fatal("status should show cache miss")
 	}
 	if strings.Contains(html, "已暂停") {
 		t.Fatal("first expensive ping must keep the next slot so the paid rewrite can refresh")
 	}
+	mu.Lock()
+	applyKeepaliveCacheResult(sessions[id],0,298100)
+	mu.Unlock()
 	recordUsage(pluginapi.UsageRecord{
 		Provider: "claude",
 		Model:    "claude-opus-5",
@@ -117,7 +122,7 @@ func TestKeepaliveCacheShowsOnStatus(t *testing.T) {
 			"Anthropic-Ratelimit-Unified-5h-Utilization": []string{"0.41"},
 		},
 	})
-	html = renderStatusHTML()
+	html = renderLegacyStatusHTML()
 	if !strings.Contains(html, "已暂停") {
 		t.Fatal("second expensive ping should pause the next slot")
 	}
@@ -528,7 +533,7 @@ func TestParseReservePercent(t *testing.T) {
 
 func TestRenderStatusHTMLIncludesBudget(t *testing.T) {
 	resetSessionsForTest()
-	html := renderStatusHTML()
+	html := renderLegacyStatusHTML()
 	if !strings.Contains(html, "5 小时已用") {
 		t.Fatalf("missing budget panel: %s", html)
 	}
@@ -557,7 +562,7 @@ func TestStatusShowsFiveHourReset(t *testing.T) {
 	t.Cleanup(resetSessionsForTest)
 	future := fmt.Sprintf("%d", time.Now().Add(90*time.Minute).Unix())
 	recordFiveHour("0.96", future)
-	html := renderStatusHTML()
+	html := renderLegacyStatusHTML()
 	if !strings.Contains(html, "刷新") {
 		t.Fatalf("missing reset on 5h card: %s", html)
 	}
@@ -585,7 +590,7 @@ func TestStatusShowsSevenDayUsage(t *testing.T) {
 			"Anthropic-Ratelimit-Unified-7d-Reset":       []string{future},
 		},
 	})
-	html := renderStatusHTML()
+	html := renderLegacyStatusHTML()
 	if !strings.Contains(html, "7 天已用") {
 		t.Fatalf("missing 7d card: %s", html)
 	}
@@ -650,7 +655,7 @@ func TestQuotaSectionRendersBelowSessions(t *testing.T) {
 	resetSessionsForTest()
 	t.Cleanup(resetSessionsForTest)
 	upsertSession("claude-opus-5", "claude", "claude", nil, claudeBody("主对话", "sys"))
-	html := renderStatusHTML()
+	html := renderLegacyStatusHTML()
 	sess := strings.Index(html, `class="list"`)
 	quota := strings.Index(html, "额度记录")
 	if sess < 0 || quota < 0 || quota < sess {
@@ -672,7 +677,7 @@ func TestQuotaLogShowsRawFiveHourHeaders(t *testing.T) {
 			"Anthropic-Ratelimit-Unified-Status":         []string{"allowed"},
 		},
 	})
-	html := renderStatusHTML()
+	html := renderLegacyStatusHTML()
 	if !strings.Contains(html, "5h-utilization=0.37") {
 		t.Fatalf("missing raw 5h utilization: %s", html)
 	}
@@ -700,7 +705,7 @@ func TestQuotaLogKeepsChatWithoutHeaders(t *testing.T) {
 	if len(got) != 1 || got[0].HeaderOK {
 		t.Fatalf("expected one missing-header sample, got=%+v", got)
 	}
-	html := renderStatusHTML()
+	html := renderLegacyStatusHTML()
 	if !strings.Contains(html, "未读到") {
 		t.Fatalf("missing missing-header label: %s", html)
 	}
@@ -815,7 +820,7 @@ func TestGuardChatOffAllowsPastStopLine(t *testing.T) {
 	if terminatedChat(t, body) {
 		t.Fatal("guard off must not local-429 even at 98%")
 	}
-	html := renderStatusHTML()
+	html := renderLegacyStatusHTML()
 	if !strings.Contains(html, "未拦对话") {
 		t.Fatalf("status should show guard off: %s", html)
 	}

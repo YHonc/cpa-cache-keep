@@ -232,7 +232,7 @@ func TestHandleStatusRenameRedirects(t *testing.T) {
 	if err := json.Unmarshal(env.Result, &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.StatusCode != http.StatusSeeOther {
+	if out.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d", out.StatusCode)
 	}
 	if listSessions()[0].Label != "实验室" {
@@ -267,10 +267,10 @@ func TestHandleStatusToggleRedirects(t *testing.T) {
 	if err := json.Unmarshal(env.Result, &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.StatusCode != http.StatusSeeOther {
+	if out.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d body=%s", out.StatusCode, env.Result)
 	}
-	if loc := out.Headers.Get("Location"); loc != "/v0/resource/plugins/claude-cache-keepalive/status" {
+	if loc := out.Headers.Get("Location"); loc != "" {
 		t.Fatalf("location=%q", loc)
 	}
 	if !listSessions()[0].Enabled {
@@ -296,7 +296,7 @@ func TestHandleStatusPingRedirects(t *testing.T) {
 		if !strings.Contains(string(body), `"max_tokens":1`) {
 			t.Fatalf("body=%s", body)
 		}
-		return http.StatusOK, []byte(`{"type":"message"}`), nil
+		return http.StatusOK, []byte(`{"type":"message","usage":{"cache_read_input_tokens":2048}}`), nil
 	}
 	t.Cleanup(func() { pingDo = orig })
 
@@ -319,7 +319,7 @@ func TestHandleStatusPingRedirects(t *testing.T) {
 	if err := json.Unmarshal(env.Result, &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.StatusCode != http.StatusSeeOther {
+	if out.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d", out.StatusCode)
 	}
 	if gotID != id {
@@ -434,7 +434,7 @@ func TestUpsertSkipsSubagentSessions(t *testing.T) {
 	if len(listSessions()) != 0 {
 		t.Fatal("subagent requests must not occupy keepalive slots")
 	}
-	html := renderStatusHTML()
+	html := renderLegacyStatusHTML()
 	if !strings.Contains(html, "已跳过") || !strings.Contains(html, "Explore the repo") {
 		t.Fatalf("status page should explain skipped subagent: %s", html)
 	}

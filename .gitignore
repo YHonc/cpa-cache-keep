@@ -6,4 +6,6 @@ dist/
 *.exe
 agent-tools/
 claude-cache-keepalive.settings.json
+claude-cache-keepalive.sessions.json
+claude-cache-keepalive.sessions.json.tmp
 .DS_Store

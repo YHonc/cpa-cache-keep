@@ -87,15 +87,19 @@ type sessionRow struct {
 	NextPingAgo string
 	PingError   string
 	CacheTTL    string
+	TTLHint     string
+	WriteTTL    string
 	BodySize    string
 	Messages    string
 	PingCache   string
 	PingHref    string
 	PingPaused  bool
+	Attempt     string
+	Result      string
 	RowClass    string
 }
 
-func renderStatusHTML() string {
+func renderLegacyStatusHTML() string {
 	st := currentStatus()
 	view := buildStatusView(st)
 	var buf bytes.Buffer
@@ -175,6 +179,7 @@ func buildStatusView(st statusPage) statusView {
 	view.Sessions = make([]sessionRow, 0, len(st.Sessions))
 	for _, item := range st.Sessions {
 		next := sessionNextPingAt(item.LastSeen, item.LastPingAt, st.Now, interval)
+			if item.RetryAt.After(next) { next = item.RetryAt }
 		row := sessionRow{
 			ID:          item.ID,
 			Label:       item.Label,
@@ -188,12 +193,18 @@ func buildStatusView(st statusPage) statusView {
 			LastPing:    formatTime(item.LastPingAt),
 			LastPingAgo: formatAgo(st.Now, item.LastPingAt),
 			PingError:   item.LastPingError,
-			CacheTTL:    dash(item.Info.CacheTTL),
+			CacheTTL:    cacheTTLLabel(item.Info.CacheTTL),
+			TTLHint:     cacheTTLHint(item.Info.CacheTTL),
 			BodySize:    formatBytes(len(item.Body)),
 			Messages:    dashInt(item.Info.MessageCount),
 			PingCache:   cacheVerdict(item.LastPingCacheRead, item.LastPingCacheWrite),
 			PingPaused:  item.PingExpensive,
+			Attempt:     formatTime(item.LastAttemptAt),
+			Result:      item.Result,
 			RowClass:    "off",
+		}
+		if item.WriteTTLKnown {
+			row.WriteTTL = fmt.Sprintf("最近保活写入：1h %s token / 5m %s token",formatUnits(item.LastWrite1h),formatUnits(item.LastWrite5m))
 		}
 		if item.Enabled {
 			if item.PingExpensive {
@@ -670,11 +681,15 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
           <input name="name" value="{{.Label}}" maxlength="42" aria-label="会话名称" spellcheck="false">
           <button type="submit">改名</button>
         </form>
-        <div class="meta">{{.Model}} · TTL {{.CacheTTL}} · {{.Messages}} 条消息 · {{.BodySize}}</div>
+        <div class="meta">{{.Model}} · {{.Messages}} 条消息 · {{.BodySize}}</div>
+        <div class="meta"><strong>当前请求缓存时长：{{.CacheTTL}}</strong></div>
+        <div class="meta">{{.TTLHint}}</div>
+        <div class="meta">读取缓存的实际 TTL：上游未提供时长拆分{{if .WriteTTL}} · {{.WriteTTL}}{{end}}</div>
         <div class="times">
           <span>最近请求 {{.SavedAt}} {{.SavedAgo}}</span>
           <span>下次保活 {{.NextPing}} {{.NextPingAgo}}</span>
           <span>上次保活 {{.LastPing}} {{.LastPingAgo}}{{if ne .PingCache "—"}} · {{.PingCache}}{{end}}</span>
+          <span>最近尝试 {{.Attempt}} · {{.Result}}</span>
         </div>
         {{if .PingPaused}}<div class="row-err">连续两次保活未命中，已暂停后续心跳，避免把冷前缀反复按 1h 写入。新对话后会重新开。</div>{{end}}
         {{if .PingError}}<div class="row-err">{{.PingError}}</div>{{end}}
@@ -686,7 +701,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
     </article>
     {{end}}
   </div>
-  <p class="hint">新对话默认不保活，点左侧方块才定时续。满员（比如 8 路）时优先顶掉没开保活的。「立刻保活」只打这一路，不等倒计时。会话名称可以自己改，留空再保存会回到首条消息。CPA 对话会在上面填的百分比停住，留下一截给保活，也避免最后一发打穿 100%。Claude Code 的 Task/Agent 子代理会单独成一路请求，插件认出来后不保活。</p>
+  <p class="hint">勾选后从最近请求或成功保活起算，每 {{.IntervalMin}} 分钟发送一次最小输出请求。名单和选择会保存，关闭浏览器不影响计时。满员时只淘汰未勾选会话；失败后 1 分钟重试。「立刻保活」立即尝试一次。缓存读取量来自本次响应，HTTP 成功但没有缓存读取时不会标记为命中。50 分钟续期需要上游实际使用 1 小时缓存。</p>
   {{if .SubagentNote}}
   <p class="hint">{{.SubagentNote}}</p>
   {{end}}
