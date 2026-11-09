@@ -2,9 +2,7 @@ package main
 
 import (
  _ "embed"
- "encoding/json"
  "fmt"
- "strings"
  "time"
 )
 
@@ -55,8 +53,7 @@ func publicStatus() publicState {
 }
 
 func renderLiveHTML() string {
- raw,_:=json.Marshal(publicStatus())
- return strings.Replace(liveHTML,"/*CACHE_STATE*/null",string(raw),1)
+	 return liveHTML
 }
 
 func renderStatusHTML() string { return renderLiveHTML() }

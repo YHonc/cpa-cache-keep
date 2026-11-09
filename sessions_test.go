@@ -4,8 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
-	"strings"
+		"strings"
 	"testing"
 	"time"
 
@@ -214,8 +213,8 @@ func TestHandleStatusRenameRedirects(t *testing.T) {
 	upsertSession("claude-opus-5", "claude", "claude", nil, claudeBody("开关跳转", "sys"))
 	id := listSessions()[0].ID
 	raw, err := json.Marshal(pluginapi.ManagementRequest{
-		Path:  "/v0/resource/plugins/claude-cache-keepalive/status",
-		Query: url.Values{"rename": {id}, "name": {"实验室"}},
+		Method: "POST", Path: managementActionsPath,
+		Body: []byte(`{"action":"rename","id":"`+id+`","name":"实验室"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -249,8 +248,8 @@ func TestHandleStatusToggleRedirects(t *testing.T) {
 		t.Fatal("new session should start unchecked")
 	}
 	raw, err := json.Marshal(pluginapi.ManagementRequest{
-		Path:  "/v0/resource/plugins/claude-cache-keepalive/status",
-		Query: url.Values{"toggle": {id}, "on": {"1"}},
+		Method: "POST", Path: managementActionsPath,
+		Body: []byte(`{"action":"toggle","id":"`+id+`","enabled":true}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -301,8 +300,8 @@ func TestHandleStatusPingRedirects(t *testing.T) {
 	t.Cleanup(func() { pingDo = orig })
 
 	raw, err := json.Marshal(pluginapi.ManagementRequest{
-		Path:  "/v0/resource/plugins/claude-cache-keepalive/status",
-		Query: url.Values{"ping": {id}},
+		Method: "POST", Path: managementActionsPath,
+		Body: []byte(`{"action":"ping","id":"`+id+`"}`),
 	})
 	if err != nil {
 		t.Fatal(err)

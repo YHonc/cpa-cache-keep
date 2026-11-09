@@ -7,15 +7,18 @@ import zipfile
 parser = argparse.ArgumentParser()
 parser.add_argument('--library', required=True, type=pathlib.Path)
 parser.add_argument('--version', default='0.10.0')
+parser.add_argument('--goos',choices=['darwin','linux','windows'],default='linux')
+parser.add_argument('--goarch',choices=['amd64','arm64'],default='amd64')
 parser.add_argument('--output', default='dist/release', type=pathlib.Path)
 args = parser.parse_args()
 root = pathlib.Path(__file__).resolve().parent.parent
 args.output.mkdir(parents=True, exist_ok=True)
-name = 'claude-cache-keepalive_' + args.version + '_linux_amd64.zip'
+name = 'claude-cache-keepalive_' + args.version + '_' + args.goos + '_' + args.goarch + '.zip'
+library_name='claude-cache-keepalive.'+{'darwin':'dylib','linux':'so','windows':'dll'}[args.goos]
 archive = args.output / name
 with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as package:
     for source, target, mode in [
-        (args.library, 'claude-cache-keepalive.so', 0o755),
+        (args.library, library_name, 0o755),
         (root / 'LICENSE', 'LICENSE', 0o644),
         (root / 'NOTICE', 'NOTICE', 0o644),
     ]:
@@ -27,8 +30,8 @@ with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as package:
 digest = hashlib.sha256(archive.read_bytes()).hexdigest()
 (args.output / 'checksums.txt').write_text(digest + '  ' + name + '\n', encoding='utf-8')
 with zipfile.ZipFile(archive) as package:
-    assert package.namelist() == ['claude-cache-keepalive.so', 'LICENSE', 'NOTICE']
+    assert package.namelist() == [library_name, 'LICENSE', 'NOTICE']
     assert package.testzip() is None
-    assert package.read('claude-cache-keepalive.so') == args.library.read_bytes()
+    assert package.read(library_name) == args.library.read_bytes()
 print(str(archive))
 print(digest)

@@ -11,6 +11,7 @@ type 12/14/16/20/32/48, weights 400/600. Plain HTML/CSS/JS; embedded production 
 @media(min-width:1450px){.wrap{padding-top:16px}}@media(max-width:1000px){.wrap{padding:0 24px}.table-head,.row{grid-template-columns:minmax(180px,1fr) 80px 90px 120px 72px;gap:16px;padding-left:20px;padding-right:20px}.overview-side{gap:24px}.orbit{display:none}.next-time{font-size:40px}}@media(max-width:720px){.wrap{padding:0 20px}.top{height:76px}.brand{gap:8px}.theme-label{display:none}.heading{padding:32px 0 24px;align-items:flex-start}h1{font-size:28px}.heading-left{display:block}.running{display:inline-flex;margin-top:12px}.button{padding:10px 12px}.button .button-text{display:none}.overview{padding:24px;gap:20px;align-items:flex-start}.overview-main{gap:0}.next-time{font-size:36px;margin-top:8px}.next-time small{display:block;margin-left:0;margin-top:8px;font-size:12px;letter-spacing:0}.overview-side{display:block;border-left:1px solid var(--line);padding-left:24px}.overview-side .metric:first-child{margin-bottom:16px}.metric-value{font-size:20px}.capacity-bars{display:none}.eyebrow{font-size:12px}.toolbar{margin-top:28px;align-items:flex-start}.tabs{gap:20px}.interval{display:none}.table-head{display:none}.row{grid-template-columns:1fr auto;gap:16px;padding:24px;position:relative}.conversation{grid-column:1;gap:12px}.avatar{width:36px;height:36px}.row>.cache{grid-column:2;grid-row:1}.row>.last{grid-row:2;grid-column:1;font-size:12px;color:var(--muted)}.mobile-label{display:inline;margin-right:6px}.renew{grid-row:3;grid-column:1}.progress{max-width:160px}.actions{grid-row:3;grid-column:2}.cache .help:after{left:auto;right:-12px;transform:none;min-width:220px}.bottom{margin-bottom:32px}.name{max-width:190px}.preview{padding:2px 5px}.help:after{left:-40px;transform:none}.empty{padding:40px 20px}}
 .heading .help:after,.overview-side .help:after{left:auto;right:0;transform:none}
 .orbit{border:0;background:conic-gradient(var(--accent) var(--fill,40%),var(--soft) 0)}.orbit:before{content:"";position:absolute;inset:5px;border-radius:50%;background:var(--surface)}.orbit svg{position:relative}
+dialog{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:16px;padding:32px;width:min(400px,calc(100vw - 32px))}dialog::backdrop{background:#0006}dialog h2{margin:0 0 24px;font-size:20px}dialog label{display:block;margin-bottom:8px}dialog input{width:100%;padding:12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
 </style></head><body>
 <svg style="display:none" aria-hidden="true"><defs>
 <symbol id="spark" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M5.6 18.4L18.4 5.6"/></symbol>
@@ -29,9 +30,13 @@ type 12/14/16/20/32/48, weights 400/600. Plain HTML/CSS/JS; embedded production 
 <div class="toolbar"><div class="tabs" role="tablist" aria-label="筛选对话"><button class="tab active" data-filter="all" role="tab" aria-selected="true">全部<span class="count" id="all-count">4</span></button><button class="tab" data-filter="active" role="tab" aria-selected="false">保活中<span class="count" id="filter-active">2</span></button><button class="tab" data-filter="attention" role="tab" aria-selected="false">待处理<span class="count" id="attention-count">2</span></button></div><div class="interval"><svg><use href="#clock"/></svg><span id="interval">50</span> 分钟 / 次</div></div>
 <section class="table" aria-label="对话列表"><div class="table-head"><span>对话</span><span>缓存时长<button class="help" data-tip="显示当前请求声明的缓存时长。1h 为一小时，5m 为五分钟。实际缓存读取量不能证明读取的是哪种时长；未声明时显示未知。" aria-label="缓存时长说明">?</button></span><span>最近请求</span><span>下次续期</span><span class="right">保活</span></div><div id="rows"></div></section>
 <div class="bottom"><svg><use href="#check"/></svg><span>选择已保存</span><button class="help" data-tip="正式插件在服务器保存选择并运行计时。浏览器关闭后仍会继续。" aria-label="保存与运行说明">?</button></div></main></div><div class="toast" role="status" hidden></div>
+<dialog id="auth"><form method="dialog"><h2>连接管理接口</h2><label for="management-key">CPA Management Key</label><input id="management-key" type="password" autocomplete="off" placeholder="输入管理密钥"><div style="display:flex;gap:12px;margin-top:20px"><button id="connect" type="button" class="button">连接</button><button class="button">取消</button><button type="button" class="help" aria-label="管理认证说明" data-tip="密钥仅保存在本页内存中，用于请求 CPA 的认证管理接口。OMC 中可直接使用已登录会话，无需重复输入。">?</button></div></form></dialog>
 <script>
 const $=s=>document.querySelector(s),icon=id=>`<svg aria-hidden="true"><use href="#${id}"/></svg>`;
-const initial=/*CACHE_STATE*/null;
+const initial={items:[],now:Date.now(),capacity:16,interval:50,paused:false,pauseReason:'',version:'0.11.0'};
+let managementKey='',authBlocked=false;
+const hostedPrefix=location.pathname.includes('/api/v1/plugin-host/')?location.pathname.split('/api/v1/plugin-host/')[0]+'/api/v1/plugin-host':'';
+const managementBase=hostedPrefix+'/v0/management/plugins/claude-cache-keepalive';
 let items=initial.items,filter='all',highlight=null,serverOffset=initial.now-Date.now(),refreshing=false;
 const currentTime=()=>Date.now()+serverOffset;
 const cfg=initial;
@@ -52,9 +57,17 @@ function updateClock(){const active=items.filter(x=>x.active&&!x.paused&&!cfg.pa
 async function refresh(params){
  if(refreshing)return;refreshing=true;
  try{
-  const q=new URLSearchParams(params||{});q.set('format','json');
-  const r=await fetch(location.pathname+'?'+q,{cache:'no-store',credentials:'same-origin'});
-  if(!r.ok)throw Error('HTTP '+r.status);
+  const headers={};if(managementKey)headers.Authorization='Bearer '+managementKey;
+  let payload=null;if(params){
+   if(params.toggle)payload={action:'toggle',id:params.toggle,enabled:params.on==='1'};
+   if(params.ping)payload={action:'ping',id:params.ping};
+   if(params.rename)payload={action:'rename',id:params.rename,name:params.name};
+   if(params.forget)payload={action:'forget',id:params.forget};
+   headers['Content-Type']='application/json';
+  }
+  const r=await fetch(managementBase+(payload?'/actions':'/state'),{method:payload?'POST':'GET',headers,body:payload?JSON.stringify(payload):undefined,cache:'no-store',credentials:'same-origin'});
+  if(r.status===401||r.status===403){authBlocked=true;$('#auth').showModal();return}
+  if(!r.ok){const failure=await r.json().catch(()=>({}));throw Error(failure.error||('HTTP '+r.status))}
   const data=await r.json();if(!Array.isArray(data.items))throw Error('状态响应无效');
   items=data.items;Object.assign(cfg,data);serverOffset=data.now-Date.now();render();
   if(data.actionError)toast(data.actionError);else if(params)toast('已保存');
@@ -71,7 +84,9 @@ document.addEventListener('click',e=>{
  const rename=e.target.closest('[data-rename]');if(rename){const x=items.find(x=>x.id===rename.dataset.rename);const name=prompt('对话名称',x.name);if(name!==null)refresh({rename:x.id,name:name.trim().slice(0,42)})}
 });document.addEventListener('keydown',e=>{if(e.key==='Escape'){document.querySelectorAll('.menu').forEach(x=>x.hidden=true);document.querySelectorAll('.help.open').forEach(x=>x.classList.remove('open'))}});
 $('#version').textContent=cfg.version;
-render();setInterval(updateClock,1000);
-setInterval(()=>{if(!document.hidden&&!document.querySelector('.menu:not([hidden])'))refresh()},15000);
+$('#connect').onclick=()=>{authBlocked=false;managementKey=$('#management-key').value;$('#management-key').value='';$('#auth').close();refresh()};
+$('#management-key').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();$('#connect').click()}};
+render();refresh();setInterval(updateClock,1000);
+setInterval(()=>{if(!document.hidden&&!authBlocked&&!$('#auth').open&&!document.querySelector('.menu:not([hidden])'))refresh()},15000);
 
 </script></body></html>

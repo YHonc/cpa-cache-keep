@@ -3,8 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"net/url"
-	"os"
+		"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -84,8 +83,8 @@ func TestHandleStatusStopRedirects(t *testing.T) {
 	mu.Unlock()
 
 	raw, err := json.Marshal(pluginapi.ManagementRequest{
-		Path:  "/v0/resource/plugins/claude-cache-keepalive/status",
-		Query: url.Values{"stop": {"92"}},
+		Method: "POST", Path: managementActionsPath,
+		Body: []byte(`{"action":"settings","stop_percent":92}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -121,8 +120,8 @@ func TestHandleStatusGuardRedirects(t *testing.T) {
 	mu.Unlock()
 
 	raw, err := json.Marshal(pluginapi.ManagementRequest{
-		Path:  "/v0/resource/plugins/claude-cache-keepalive/status",
-		Query: url.Values{"guard": {"0"}},
+		Method: "POST", Path: managementActionsPath,
+		Body: []byte(`{"action":"settings","guard_chat":false}`),
 	})
 	if err != nil {
 		t.Fatal(err)

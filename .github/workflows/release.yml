@@ -1,0 +1,75 @@
+name: Five-platform release
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: macos-15-intel, goos: darwin, goarch: amd64, extension: dylib}
+          - {runner: macos-15, goos: darwin, goarch: arm64, extension: dylib}
+          - {runner: ubuntu-24.04, goos: linux, goarch: amd64, extension: so}
+          - {runner: ubuntu-24.04-arm, goos: linux, goarch: arm64, extension: so}
+          - {runner: windows-2022, goos: windows, goarch: amd64, extension: dll}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+      - name: Configure native Windows CGO compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $compiler = (Get-Command gcc -ErrorAction Stop).Source
+          "CC=$compiler" >> $env:GITHUB_ENV
+      - name: Test, build, load and package
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+          TARGET_OS: ${{ matrix.goos }}
+          TARGET_ARCH: ${{ matrix.goarch }}
+          LIB_EXT: ${{ matrix.extension }}
+        run: |
+          set -eu
+          test "$(go env GOOS)" = "$TARGET_OS"
+          test "$(go env GOARCH)" = "$TARGET_ARCH"
+          go test ./...
+          go test -race ./...
+          mkdir -p dist
+          go build -buildvcs=false -buildmode=c-shared -o "dist/claude-cache-keepalive.$LIB_EXT" .
+          python scripts/check-native.py --library "dist/claude-cache-keepalive.$LIB_EXT"
+          python scripts/package-release.py --library "dist/claude-cache-keepalive.$LIB_EXT" --version 0.11.0 --goos "$TARGET_OS" --goarch "$TARGET_ARCH"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/release/*.zip
+          if-no-files-found: error
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: Publish all five ZIPs together
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -eu
+          test "$(find release -name '*.zip' | wc -l)" -eq 5
+          cd release
+          sha256sum *.zip > checksums.txt
+          gh release create "$RELEASE_TAG" *.zip checksums.txt --title "CPA Cache Keep $RELEASE_TAG" --notes "Static resource-only UI; authenticated management APIs for state and POST actions. Five native platform builds passed unit, race and ABI-loading checks. See README and VALIDATION.md for usage and verification scope."

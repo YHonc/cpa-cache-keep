@@ -70,7 +70,7 @@ import (
 
 const (
 	pluginID      = "claude-cache-keepalive"
-	pluginVersion = "0.10.0"
+	pluginVersion = "0.11.0"
 )
 
 type envelope struct {
@@ -211,6 +211,10 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return okEnvelope(map[string]any{})
 	case pluginabi.MethodManagementRegister:
 		return okEnvelope(map[string]any{
+			"routes": []map[string]string{
+				{"Method":"GET", "Path":managementStatePath},
+				{"Method":"POST", "Path":managementActionsPath},
+			},
 			"resources": []map[string]string{{
 				"Path":        "/status",
 				"Menu":        "缓存保活",
@@ -321,62 +325,6 @@ func handleUsage(raw []byte) {
 		return
 	}
 	recordUsage(rec)
-}
-
-func handleStatusRequest(raw []byte) ([]byte, error) {
-	var req pluginapi.ManagementRequest
-	if len(raw) > 0 {
-		_ = json.Unmarshal(raw, &req)
-	}
-	redirect := false
-	actionError := ""
-	if id := sanitizeSessionID(queryGet(req.Query, "toggle")); id != "" {
-		on := queryGet(req.Query, "on")
-		setSessionEnabled(id, on != "0")
-		redirect = true
-	}
-	if id := sanitizeSessionID(queryGet(req.Query, "forget")); id != "" {
-		forgetSession(id)
-		redirect = true
-	}
-	if id := sanitizeSessionID(queryGet(req.Query, "rename")); id != "" {
-		renameSession(id, queryGet(req.Query, "name"))
-		redirect = true
-	}
-	if id := sanitizeSessionID(queryGet(req.Query, "ping")); id != "" {
-		if err := pingSessionNow(id); err != nil {
-			actionError = err.Error()
-			_ = hostLog(fmt.Sprintf("claude-cache-keepalive manual ping failed: %s", err.Error()))
-		} else {
-			_ = hostLog("claude-cache-keepalive manual ping ok")
-		}
-		redirect = true
-	}
-	if stop, ok := parseStopQuery(queryGet(req.Query, "stop")); ok {
-		setStopPercent(stop)
-		redirect = true
-	}
-	if on, ok := parseGuardQuery(queryGet(req.Query, "guard")); ok {
-		setGuardChat(on)
-		redirect = true
-	}
-	// OMC prefixes the public URL with /api/v1/plugin-host. Redirecting to
-	// req.Path loses that prefix and reaches the intentionally blocked native
-	// resource route. Render the updated page at the existing proxy URL.
-	_ = redirect
-	if queryGet(req.Query,"format")=="json" {
-		state:=publicStatus();state.ActionError=actionError
-		body,err:=json.Marshal(state);if err!=nil{return nil,err}
-		return okEnvelope(map[string]any{"StatusCode":http.StatusOK,"Headers":http.Header{"Content-Type":[]string{"application/json; charset=utf-8"},"Cache-Control":[]string{"no-store"}},"Body":body})
-	}
-	return okEnvelope(map[string]any{
-		"StatusCode": http.StatusOK,
-		"Headers": http.Header{
-			"Content-Type":  []string{"text/html; charset=utf-8"},
-			"Cache-Control": []string{"no-store"},
-		},
-		"Body": []byte(renderStatusHTML()),
-	})
 }
 
 func queryGet(query map[string][]string, key string) string {

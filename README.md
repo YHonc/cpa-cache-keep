@@ -54,11 +54,11 @@ flowchart LR
 
 | 模块 | 职责 |
 | --- | --- |
-| `main.go` | C ABI、插件注册、请求拦截、管理操作和定时循环 |
+| `main.go`、`management.go` | C ABI、插件注册、请求拦截、静态资源与认证管理路由分发 |
 | `keepalive.go`、`sessions.go` | 请求筛选、会话归组、快照、时间与容量管理 |
 | `renew.go`、`ping.go` | 协议路由、最小输出重放、响应验证、文件持久化 |
 | `cache_ttl.go` | 解析请求声明的 1h、5m、混合或未知时长 |
-| `ui_live.go`、`ui.html` | 脱敏状态接口、实时页面和明暗主题 |
+| `ui_live.go`、`ui.html` | 状态序列化、静态页面和明暗主题；页面通过认证 API 获取状态 |
 | `usage.go`、`settings.go` | 继承上游额度状态、暂停规则与配置持久化 |
 
 Claude Messages、OpenAI Chat Completions 和 Responses 格式分别重放到本机 `/v1/messages`、`/v1/chat/completions` 和 `/v1/responses`。保留客户端请求的公开模型别名。这里只收录最终面向 Claude 的请求，不为 GPT、Gemini 等模型续期。兼容协议是否能命中，还取决于 CPA 的转换行为和上游路由。
@@ -73,14 +73,14 @@ Claude Messages、OpenAI Chat Completions 和 Responses 格式分别重放到本
 
 ## 安装
 
-当前构建验证环境为 Linux amd64、CPA 8.0.59 和 Oh My CPA 0.3.23。需要启用 CPA 插件支持；动态库使用 `-buildmode=c-shared`。
+发布覆盖 Darwin amd64/arm64、Linux amd64/arm64 和 Windows amd64。运行目标为启用原生插件支持的 CPA，动态库使用 `-buildmode=c-shared`。线上验证环境为 Linux amd64、CPA 8.0.59 和 Oh My CPA 0.3.23；其余平台通过原生运行环境的测试、编译和动态库加载检查验证。
 
-1. 下载 [Release 中的 Linux amd64 ZIP](https://github.com/YHonc/cpa-cache-keep/releases/download/v0.10.0/claude-cache-keepalive_0.10.0_linux_amd64.zip)，对照同一 Release 的 [checksums.txt](https://github.com/YHonc/cpa-cache-keep/releases/download/v0.10.0/checksums.txt) 校验。ZIP 可供 CPA 插件商店安装器使用，也可解压后手动安装。
+1. 下载 [Release 中的 Linux amd64 ZIP](https://github.com/YHonc/cpa-cache-keep/releases/download/v0.11.0/claude-cache-keepalive_0.11.0_linux_amd64.zip)，对照同一 Release 的 [checksums.txt](https://github.com/YHonc/cpa-cache-keep/releases/download/v0.11.0/checksums.txt) 校验。ZIP 可供 CPA 插件商店安装器使用，也可解压后手动安装。
 2. 停止 CPA，将动态库保存为 `plugins/linux/amd64/claude-cache-keepalive.so`。替换前备份旧动态库与配置。
 3. 将 [配置示例](config.example.yaml) 合并到 CPA 配置，然后启动 CPA。
 4. 正常请求经过 CPA 后，打开“缓存保活”资源页，开启目标对话的保活开关。
 
-原生资源路径：
+静态页面路径：
 
 ```text
 /v0/resource/plugins/claude-cache-keepalive/status
@@ -92,7 +92,16 @@ Oh My CPA 代理路径：
 /api/v1/plugin-host/v0/resource/plugins/claude-cache-keepalive/status
 ```
 
-对外访问走面板已认证的代理入口。原生资源路径应限制在本机或由反向代理提供认证，不能直接公开会话内容和管理操作。插件保持相对路径请求，适配 OMC 的代理前缀。
+resource 路由只提供编译时嵌入的静态页面，不注入会话状态，也不处理查询参数中的操作。动态接口位于 CPA Management Key 认证之后：
+
+```text
+GET  /v0/management/plugins/claude-cache-keepalive/state
+POST /v0/management/plugins/claude-cache-keepalive/actions
+```
+
+POST 接收 JSON，例如 `{"action":"toggle","id":"会话ID","enabled":true}`。其他 action 为 forget、rename、ping 和 settings。GET 不执行修改。管理路由不设置 Menu，避免被宿主转换成公开 resource。
+
+在 OMC 内，页面通过已登录会话的 plugin-host 代理访问管理接口。直接打开 CPA 静态页面时，需输入 Management Key；密钥仅保存在本页内存中。认证失败会停止自动请求，等待用户重新连接。反向代理可以继续提供额外访问限制，但插件不依赖它来保护动态接口。
 
 ## 配置与数据
 
@@ -124,10 +133,10 @@ make build
 发布前打包：
 
 ```sh
-python3 scripts/package-release.py --library dist/linux/amd64/claude-cache-keepalive.so --version 0.10.0
+python3 scripts/package-release.py --library dist/linux/amd64/claude-cache-keepalive.so --version 0.11.0
 ```
 
-脚本生成 `dist/release/claude-cache-keepalive_0.10.0_linux_amd64.zip` 和 `checksums.txt`。将两者上传到 `v0.10.0` GitHub Release；ZIP 根目录包含动态库、LICENSE 和 NOTICE。当前发布 Linux amd64 构建。
+脚本通过 `--goos` 和 `--goarch` 指定目标，生成对应 ZIP 和 `checksums.txt`。`.github/workflows/release.yml` 在五种原生运行环境中运行单元、竞态与 ABI 加载检查，全部通过后一次发布五个 ZIP 和统一校验文件。ZIP 根目录包含对应动态库、LICENSE 和 NOTICE。
 
 官方商店从 [CLIProxyAPI-Plugins-Store](https://github.com/router-for-me/CLIProxyAPI-Plugins-Store) 的 registry.json 读取目录。GitHub Topic 不会自动触发收录；登记 PR 合并后才会出现在官方源。后续更新按 `v<版本>` 发布新 Release，并附同版本 ZIP 与校验文件。
 

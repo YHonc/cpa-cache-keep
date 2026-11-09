@@ -3,7 +3,6 @@ package main
 import (
  "encoding/json"
  "net/http"
- "net/url"
  "strings"
  "testing"
  "time"
@@ -18,7 +17,8 @@ func TestLiveUIUsesRealStateWithoutReplaySecrets(t *testing.T){
  raw,_:=json.Marshal(publicStatus())
  if strings.Contains(string(raw),"PRIVATE-TEST-KEY")||strings.Contains(string(raw),"Headers")||strings.Contains(string(raw),"Body") {t.Fatal("public state leaked replay data")}
  html:=renderStatusHTML()
- for _,want:=range []string{"Synthetic conversation","切换明暗主题","会话识别与缓存详情","0.10.0"}{if !strings.Contains(html,want){t.Fatalf("UI missing %s",want)}}
+ for _,want:=range []string{"切换明暗主题","会话识别与缓存详情"}{if !strings.Contains(html,want){t.Fatalf("UI missing %s",want)}}
+ if strings.Contains(html,"Synthetic conversation")||strings.Contains(html,"PRIVATE-TEST-KEY"){t.Fatal("static resource leaks session state")}
  if strings.Contains(html,"模拟新请求")||strings.Contains(html,"交互预览") {t.Fatal("demo controls shipped to live UI")}
 }
 
@@ -27,7 +27,7 @@ func TestLiveManagementJSONToggleAndCountdown(t *testing.T){
  now:=time.Now()
  id:="0123456789abcdef"
  sessions[id]=&session{ID:id,Label:"test",Body:[]byte(`{"input":"test"}`),LastSeen:now,SavedAt:now}
- req,_:=json.Marshal(pluginapi.ManagementRequest{Path:"/status",Query:url.Values{"toggle":{id},"on":{"1"},"format":{"json"}}})
+ req,_:=json.Marshal(pluginapi.ManagementRequest{Method:"POST",Path:managementActionsPath,Body:[]byte(`{"action":"toggle","id":"`+id+`","enabled":true}`)})
  raw,err:=handleStatusRequest(req);if err!=nil{t.Fatal(err)}
  var env envelope;json.Unmarshal(raw,&env)
  var resp pluginapi.ManagementResponse;json.Unmarshal(env.Result,&resp)
