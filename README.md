@@ -114,7 +114,7 @@ POST 接收 JSON，例如 `{"action":"toggle","id":"会话ID","enabled":true}`�
 | `guard_chat` | false | 关闭继承的普通聊天额度拦截 |
 | `messages_url` | `http://127.0.0.1:8317/v1/messages` | 本机 CPA 地址，重放时按协议选择路径 |
 
-名单、选择、时间与快照保存在 CPA 工作目录的 `claude-cache-keepalive.sessions.json`，写入权限为 0600。快照含对话正文和重放所需的客户端认证头，应留在服务器，不能提交到 Git。页面状态接口不返回请求正文、请求头或 API Key。
+名单、选择、时间与快照保存在 CPA 工作目录的 `claude-cache-keepalive.sessions.json`，Unix 写入权限为 0600；Windows 沿用工作目录的 NTFS ACL，应将工作目录放在受限的用户或服务目录中。快照含对话正文和重放所需的客户端认证头，应留在服务器，不能提交到 Git。页面状态接口不返回请求正文、请求头或 API Key。
 
 重启后恢复持久化会话。旧版插件的内存快照不能直接迁移，首次替换后需产生一次新的正常请求，再勾选会话。回退时恢复旧动态库和配置并重启 CPA；保留状态文件即可在重新升级时恢复。
 

@@ -4,6 +4,7 @@ import (
  "net/http"
  "os"
  "path/filepath"
+ "runtime"
  "testing"
  "time"
 
@@ -38,7 +39,8 @@ func TestRenewSelectedSessionSurvivesNewConversationAndRestart(t *testing.T){
  loadSessions()
  s,ok:=cloneSessionByID(id)
  if !ok || !s.Enabled || string(s.Body)!=string(body){t.Fatal("selection or snapshot lost")}
- stat,err:=os.Stat(stateFile);if err!=nil || stat.Mode().Perm()!=0600{t.Fatal("state permissions")}
+ stat,err:=os.Stat(stateFile);if err!=nil{t.Fatal(err)}
+ if runtime.GOOS!="windows"&&stat.Mode().Perm()!=0600{t.Fatal("state permissions")}
 }
 
 func TestRenewLastRequestReschedulesAndFailureRetries(t *testing.T){
